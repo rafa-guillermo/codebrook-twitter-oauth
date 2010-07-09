@@ -26,6 +26,7 @@ THE SOFTWARE.
 
 using namespace std;
 
+// ConsumerKey and ConsumerSecret uniquely identify your application
 // TODO Go to http://twitter.com/oauth_clients/new and register your own Client application.
 // TODO Then replace the ConsumerKey and ConsumerSecret in the values below.
 
@@ -35,13 +36,13 @@ wstring ConsumerSecret = L"xsvm2NAksjsJGw63RMWAtec3Lz5uiBusfVt48gbdKLg";
 const wstring HostName = L"http://twitter.com";
 const wstring AccessUrl = L"http://twitter.com/oauth/access_token";
 const wstring AuthorizeUrl = L"http://twitter.com/oauth/authorize?oauth_token=%s";
-const wstring RequestUrl = L"http://twitter.com/oauth/request_token?some_other_parameter=hello&another_one=goodbye";
+const wstring RequestUrl = L"http://twitter.com/oauth/request_token?some_other_parameter=hello&another_one=goodbye#meep"; // threw in some parameters for fun, and to test UrlGetQuery
 const wstring UserTimelineUrl = L"http://twitter.com/statuses/user_timeline.xml";
+
+const wstring AuthFileName = L"tc2_saved.txt";
 
 typedef std::map<wstring, wstring> OAuthParameters;
 
-// UrlGetQuery is effectively unused/untested because none of the URLs
-// that are used in this sample contain query elements
 wstring UrlGetQuery( const wstring& url ) 
 {
 	wstring query;
@@ -52,11 +53,23 @@ wstring UrlGetQuery( const wstring& url )
 	components.lpszExtraInfo = buf;
 	components.dwExtraInfoLength = SIZEOF(buf);
 
-	BOOL ok = InternetCrackUrl(url.c_str(), url.size(), 0, &components);
-	if(ok)
+	BOOL crackUrlOk = InternetCrackUrl(url.c_str(), url.size(), 0, &components);
+	_ASSERTE(crackUrlOk);
+	if(crackUrlOk)
 	{
-		// TODO probably need to strip leading ? and #section for this to actually be useful
 		query = components.lpszExtraInfo;
+
+		wstring::size_type q = query.find_first_of(L'?');
+		if(q != wstring::npos)
+		{
+			query = query.substr(q + 1);
+		}
+
+		wstring::size_type h = query.find_first_of(L'#');
+		if(h != wstring::npos)
+		{
+			query = query.substr(0, h);
+		}
 	}
 	return query;
 }
@@ -71,7 +84,8 @@ OAuthParameters ParseQueryString( const wstring& url )
 	for(size_t i = 0; i < queryParams.size(); ++i)
 	{
 		vector<wstring> paramElements;
-		Split(queryParams[i], paramElements, L'=', false);
+		Split(queryParams[i], paramElements, L'=', true);
+		_ASSERTE(paramElements.size() == 2);
 		if(paramElements.size() == 2)
 		{
 			ret[paramElements[0]] = paramElements[1];
@@ -309,14 +323,13 @@ string HMACSHA1( const string& keyBytes, const string& data )
 		goto ErrorExit;
 	}
 
-	// Print the hash to the console.
-
 	for(DWORD i = 0 ; i < dwDataLen ; i++) 
 	{
 		hash.push_back((char)pbHash[i]);
 	}
 
 	// Free resources.
+	// lol goto
 ErrorExit:
 	if(hHmacHash)
 		CryptDestroyHash(hHmacHash);
@@ -340,6 +353,20 @@ wstring Base64String( const string& hash )
 	return encoded;
 }
 
+// char2hex and urlencode from http://www.zedwood.com/article/111/cpp-urlencode-function
+// modified according to http://oauth.net/core/1.0a/#encoding_parameters
+//
+//5.1.  Parameter Encoding
+//
+//All parameter names and values are escaped using the [RFC3986]  
+//percent-encoding (%xx) mechanism. Characters not in the unreserved character set 
+//MUST be encoded. Characters in the unreserved character set MUST NOT be encoded. 
+//Hexadecimal characters in encodings MUST be upper case. 
+//Text names and values MUST be encoded as UTF-8 
+// octets before percent-encoding them per [RFC3629].
+//
+//  unreserved = ALPHA, DIGIT, '-', '.', '_', '~'
+
 string char2hex( char dec )
 {
 	char dig1 = (dec&0xF0)>>4;
@@ -354,20 +381,6 @@ string char2hex( char dec )
 	r.append( &dig2, 1);
 	return r;
 }
-
-// from http://www.zedwood.com/article/111/cpp-urlencode-function
-// modified according to http://oauth.net/core/1.0a/#encoding_parameters
-//
-//5.1.  Parameter Encoding
-//
-//All parameter names and values are escaped using the [RFC3986]  
-//percent-encoding (%xx) mechanism. Characters not in the unreserved character set 
-//MUST be encoded. Characters in the unreserved character set MUST NOT be encoded. 
-//Hexadecimal characters in encodings MUST be upper case. 
-//Text names and values MUST be encoded as UTF-8 
-// octets before percent-encoding them per [RFC3629].
-//
-//  unreserved = ALPHA, DIGIT, '-', '.', '_', '~'
 
 string urlencode(const string &c)
 {
@@ -394,7 +407,7 @@ string urlencode(const string &c)
 }
 
 
-wstring EscapeDataString( const wstring& url ) 
+wstring UrlEncode( const wstring& url ) 
 {
 	// multiple encodings r sux
 	return UTF8ToWide(urlencode(WideToUTF8(url)));
@@ -402,9 +415,9 @@ wstring EscapeDataString( const wstring& url )
 
 wstring OAuthCreateSignature( const wstring& signatureBase, const wstring& consumerSecret, const wstring& requestTokenSecret ) 
 {
-	// URL encode key elements http://oauth.net/core/1.0/#anchor16
-	wstring escapedConsumerSecret = EscapeDataString(consumerSecret);
-	wstring escapedTokenSecret = EscapeDataString(requestTokenSecret);
+	// URL encode key elements
+	wstring escapedConsumerSecret = UrlEncode(consumerSecret);
+	wstring escapedTokenSecret = UrlEncode(requestTokenSecret);
 
 	wstring key = escapedConsumerSecret + L"&" + escapedTokenSecret;
 	string keyBytes = WideToUTF8(key);
@@ -413,16 +426,16 @@ wstring OAuthCreateSignature( const wstring& signatureBase, const wstring& consu
 	string hash = HMACSHA1(keyBytes, data);
 	wstring signature = Base64String(hash);
 
-	// You must encode the URI for safe net travel
-	signature = EscapeDataString(signature);
+	// URL encode the returned signature
+	signature = UrlEncode(signature);
 	return signature;
 }
 
 
 wstring OAuthConcatenateRequestElements( const wstring& httpMethod, wstring url, const wstring& parameters ) 
 {
-	wstring escapedUrl = EscapeDataString(url);
-	wstring escapedParameters = EscapeDataString(parameters);
+	wstring escapedUrl = UrlEncode(url);
+	wstring escapedParameters = UrlEncode(parameters);
 
 	wstring ret = httpMethod + L"&" + escapedUrl + L"&" + escapedParameters;
 	return ret;
@@ -431,7 +444,9 @@ wstring OAuthConcatenateRequestElements( const wstring& httpMethod, wstring url,
 wstring OAuthNormalizeRequestParameters( const OAuthParameters& requestParameters ) 
 {
 	list<wstring> sorted;
-	for(OAuthParameters::const_iterator it = requestParameters.begin(); it != requestParameters.end(); ++it)
+	for(OAuthParameters::const_iterator it = requestParameters.begin(); 
+		it != requestParameters.end(); 
+		++it)
 	{
 		wstring param = it->first + L"=" + it->second;
 		sorted.push_back(param);
@@ -476,17 +491,28 @@ wstring OAuthNormalizeUrl( const wstring& url )
 	{
 		wchar_t port[10] = {};
 
+		// The port number must only be included if it is non-standard
 		if((Compare(scheme, L"http", false) && components.nPort != 80) || 
 			(Compare(scheme, L"https", false) && components.nPort != 443))
 		{
 			swprintf_s(port, SIZEOF(port), L":%u", components.nPort);
 		}
-		normalUrl = wstring(scheme) + L"://" + host + port + path;
+
+		// InternetCrackUrl includes ? and # elements in the path, 
+		// which we need to strip off
+		wstring pathOnly = path;
+		wstring::size_type q = pathOnly.find_first_of(L"#?");
+		if(q != wstring::npos)
+		{
+			pathOnly = pathOnly.substr(0, q);
+		}
+
+		normalUrl = wstring(scheme) + L"://" + host + port + pathOnly;
 	}
 	return normalUrl;
 }
 
-OAuthParameters GetOAuthParameters( OAuthParameters& requestParameters, 
+OAuthParameters BuildSignedOAuthParameters( const OAuthParameters& requestParameters, 
 								   const wstring& url, 
 								   const wstring& httpMethod, 
 								   const wstring& consumerKey, 
@@ -513,21 +539,21 @@ OAuthParameters GetOAuthParameters( OAuthParameters& requestParameters,
 		oauthParameters[L"oauth_token"] = requestToken;
 	}
 
-	// add the request token if found
+	// add the authorization pin if found
 	if (!pin.empty())
 	{
 		oauthParameters[L"oauth_verifier"] = pin;
 	}
 
-	// fold oauth into any existing request request parameters
-	for(OAuthParameters::const_iterator it = oauthParameters.begin(); it != oauthParameters.end(); ++it)
-	{
-		requestParameters[it->first] = it->second;
-	}
+	// create a parameter list containing both oauth and original parameters
+	// this will be used to create the parameter signature
+	OAuthParameters allParameters = requestParameters;
+	allParameters.insert(oauthParameters.begin(), oauthParameters.end());
 
-	// prepare a signature base
+	// prepare a signature base, a carefully formatted string containing 
+	// all of the necessary information needed to generate a valid signature
 	wstring normalUrl = OAuthNormalizeUrl(url);
-	wstring normalizedParameters = OAuthNormalizeRequestParameters(requestParameters);
+	wstring normalizedParameters = OAuthNormalizeRequestParameters(allParameters);
 	wstring signatureBase = OAuthConcatenateRequestElements(httpMethod, normalUrl, normalizedParameters);
 
 	// obtain a signature and add it to header requestParameters
@@ -535,43 +561,35 @@ OAuthParameters GetOAuthParameters( OAuthParameters& requestParameters,
 	oauthParameters[L"oauth_signature"] = signature;
 
 	return oauthParameters;
-
 }
 
-wstring OAuthWebRequest( const OAuthParameters& parameters, const wstring& url ) 
+wstring OAuthWebRequestSubmit( 
+	const OAuthParameters& parameters, 
+	const wstring& url 
+	) 
 {
-	_TRACE("OAuthWebRequest(%s)", url.c_str());
+	_TRACE("OAuthWebRequestSubmit(%s)", url.c_str());
 
-	//for(OAuthParameters::const_iterator it = parameters.begin(); it != parameters.end(); ++it)
-	//{
-	//	_TRACE("%s = %s", it->first.c_str(), it->second.c_str());
-	//}
+	wstring oauthHeader = L"Authorization: OAuth ";
 
-	wstring header = L"Authorization: ";
-	header += L"OAuth ";
-
-	//if (!string.IsNullOrEmpty(realm))
-	//{
-	//	// add realm info if provided
-	//	header.Append("realm=\"" + realm + "\", ");
-	//}
-
-	for(OAuthParameters::const_iterator it = parameters.begin(); it != parameters.end(); ++it)
+	for(OAuthParameters::const_iterator it = parameters.begin(); 
+		it != parameters.end(); 
+		++it)
 	{
 		_TRACE("%s = %s", it->first.c_str(), it->second.c_str());
 
 		if(it != parameters.begin())
 		{
-			header += L",";
+			oauthHeader += L",";
 		}
 
 		wstring pair;
 		pair += it->first + L"=\"" + it->second + L"\"";
-		header += pair;
+		oauthHeader += pair;
 	}
-	header += L"\r\n";
+	oauthHeader += L"\r\n";
 
-	_TRACE("%s", header.c_str());
+	_TRACE("%s", oauthHeader.c_str());
 
 	wchar_t host[1024*4] = {};
 	wchar_t path[1024*4] = {};
@@ -591,15 +609,28 @@ wstring OAuthWebRequest( const OAuthParameters& parameters, const wstring& url )
 
 	wstring result;
 
-	HINTERNET hINet = InternetOpen(L"tc2/1.0", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0 );
+	// TODO you'd probably want to InternetOpen only once at app initialization
+	HINTERNET hINet = InternetOpen(L"tc2/1.0", 
+		INTERNET_OPEN_TYPE_PRECONFIG, 
+		NULL, 
+		NULL, 
+		0 );
 	_ASSERTE( hINet != NULL );
 	if ( hINet != NULL )
 	{
-		HINTERNET hConnection = InternetConnect( hINet, host, 80, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0 );
+		// TODO add support for HTTPS requests
+		HINTERNET hConnection = InternetConnect( 
+			hINet, 
+			host, 
+			components.nPort, 
+			NULL, 
+			NULL, 
+			INTERNET_SERVICE_HTTP, 
+			0, 0 );
 		_ASSERTE(hConnection != NULL);
 		if ( hConnection != NULL)
 		{
-			// Get data
+			// TODO add support for handling POST requests
 			HINTERNET hData = HttpOpenRequest( hConnection, 
 				L"GET", 
 				path, 
@@ -611,15 +642,22 @@ wstring OAuthWebRequest( const OAuthParameters& parameters, const wstring& url )
 			_ASSERTE(hData != NULL);
 			if ( hData != NULL )
 			{
-				BOOL addHeadersOk = HttpAddRequestHeaders(hData, header.c_str(), header.size(), 0);
+				BOOL addHeadersOk = HttpAddRequestHeaders(hData, 
+					oauthHeader.c_str(), 
+					oauthHeader.size(), 
+					0);
 				_ASSERTE(addHeadersOk);
 
 				BOOL sendOk = HttpSendRequest( hData, NULL, 0, NULL, 0);
 				_ASSERTE(sendOk);
 
+				// TODO dynamically allocate return buffer
 				BYTE buffer[1024*32] = {};
 				DWORD dwRead = 0;
-				while( InternetReadFile( hData, buffer, SIZEOF(buffer) - 1, &dwRead ) && dwRead > 0)
+				while( 
+					InternetReadFile( hData, buffer, SIZEOF(buffer) - 1, &dwRead ) &&
+					dwRead > 0
+					)
 				{
 					buffer[dwRead] = 0;
 					result += UTF8ToWide((char*)buffer);
@@ -637,90 +675,58 @@ wstring OAuthWebRequest( const OAuthParameters& parameters, const wstring& url )
 	return result;
 }
 
-wstring OAuthGetRequestToken(const wstring& url, 
-							 const wstring& consumerKey, const wstring& consumerSecret)
+// OAuthWebRequest used for all OAuth related queries
+//
+// consumerKey and consumerSecret - must be provided for every call, they identify the application
+// oauthToken and oauthTokenSecret - need to be provided for every call, except for the first token request before authorizing
+// pin - only used during authorization, when the user enters the PIN they received from the twitter website
+wstring OAuthWebRequestSubmit( 
+    const wstring& url, 
+    const wstring& httpMethod, 
+    const wstring& consumerKey, 
+    const wstring& consumerSecret, 
+    const wstring& oauthToken = L"", 
+    const wstring& oauthTokenSecret = L"", 
+    const wstring& pin = L""
+    )
 {
-	wstring query = UrlGetQuery(url);
-	OAuthParameters parameters = ParseQueryString(query);
-	OAuthParameters oauthParameters = GetOAuthParameters(parameters, url, L"GET", consumerKey, 
-		consumerSecret);
-	return OAuthWebRequest(oauthParameters, url);
+    wstring query = UrlGetQuery(url);
+    OAuthParameters originalParameters = ParseQueryString(query);
+
+    OAuthParameters oauthSignedParameters = BuildSignedOAuthParameters(
+        originalParameters, 
+        url, 
+        httpMethod, 
+        consumerKey, consumerSecret, 
+        oauthToken, oauthTokenSecret, 
+        pin );
+    return OAuthWebRequestSubmit(oauthSignedParameters, url);
 }
-
-wstring OAuthGetAccessToken( const wstring& url, 
-							const wstring& consumerKey, const wstring& consumerSecret, 
-							const wstring& oauthToken, const wstring& oauthTokenSecret, 
-							const wstring& pin ) 
-{
-	wstring query = UrlGetQuery(url);
-	OAuthParameters parameters = ParseQueryString(query);
-	OAuthParameters oauthParameters = GetOAuthParameters(parameters, url, L"GET", consumerKey, 
-		consumerSecret, oauthToken, oauthTokenSecret, pin);
-	return OAuthWebRequest(oauthParameters, url);
-}
-
-wstring OAuthGetProtectedResource( const wstring& url, const wstring& httpMethod, 
-								  const wstring& consumerKey, const wstring& consumerSecret, 
-								  const wstring& oauthToken, const wstring& oauthTokenSecret ) 
-{
-	wstring query = UrlGetQuery(url);
-	OAuthParameters parameters = ParseQueryString(query);
-	OAuthParameters oauthParameters = GetOAuthParameters(parameters, url, httpMethod, 
-		consumerKey, consumerSecret, oauthToken, oauthTokenSecret);
-	return OAuthWebRequest(oauthParameters, url);
-}
-
-void WriteBytes(const string& data)
-{
-	wstring line;
-	for(size_t c = 0; c < data.size(); ++c)
-	{
-		wchar_t buf[10] = {};
-		swprintf_s(buf, SIZEOF(buf), L"%u ", (BYTE)data[c]);
-
-		line += buf;
-	}
-	_TRACE("%u = %s", data.size(), line.c_str());
-}
-
-void TestHash()
-{
-	wstring key = L"hello&world";
-	wstring data = L"This is my message here that I hash.";
-
-	string keyBytes = WideToUTF8(key);
-	WriteBytes(keyBytes);
-	string dataBytes = WideToUTF8(data);
-	WriteBytes(dataBytes);
-
-	string hash = HMACSHA1(keyBytes, dataBytes);
-	WriteBytes(hash);
-
-	wstring signature = Base64String(hash);
-	_TRACE("%s", signature.c_str());
-}
-
 
 int _tmain(int argc, _TCHAR* argv[])
 {
-	_TRACE("Hi there.");
-
 	CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-
 	srand(_time32(NULL));
 
-	//TestHash();
+	string savedAccessTokenString;
 
-	// TODO in theory you would load the saved values for these once the user has authorized
-	wstring oauthAccessToken;
-	wstring oauthAccessTokenSecret;
+	ifstream inFile;
+	inFile.open(AuthFileName.c_str());
+	inFile >> savedAccessTokenString;
+	inFile.close();
 
-	if( oauthAccessToken.empty() )
+	OAuthParameters savedParameters = ParseQueryString(UTF8ToWide(savedAccessTokenString));
+
+	wstring oauthAccessToken = savedParameters[L"oauth_token"];
+	wstring oauthAccessTokenSecret = savedParameters[L"oauth_token_secret"];
+	wstring screenName = savedParameters[L"screen_name"];
+
+	if( oauthAccessToken.empty() || oauthAccessTokenSecret.empty() )
 	{
 		// Overall OAuth flow based on 
 		// Professional Twitter Development: With Examples in .NET 3.5 by Daniel Crenna
 
-		wstring requestToken = OAuthGetRequestToken(RequestUrl, ConsumerKey, ConsumerSecret);
+		wstring requestToken = OAuthWebRequestSubmit(RequestUrl, L"GET", ConsumerKey, ConsumerSecret);
 
 		OAuthParameters response = ParseQueryString(requestToken);
 		wstring oauthToken = response[L"oauth_token"];
@@ -730,34 +736,48 @@ int _tmain(int argc, _TCHAR* argv[])
 			wchar_t buf[1024] = {};
 			swprintf_s(buf, SIZEOF(buf), AuthorizeUrl.c_str(), oauthToken.c_str());
 
-			_TRACE("Launching %s", buf);
+			wprintf(L"Launching %s\r\n", buf);
 			ShellExecute(NULL, L"open", buf, NULL, NULL, SW_SHOWNORMAL);
 		}
 
 		// TODO ok, using debug-only trace function to prompt the user isn't a great idea
 		wchar_t pin[1024] = {};
-		_TRACE("");
-		_TRACE("Enter the PIN you receive after authorizing this program in your web browser: ");
+		wprintf(L"\r\n");
+		wprintf(L"Enter the PIN you receive after authorizing this program in your web browser: ");
 		_getws_s(pin, SIZEOF(pin));
 
 		// exchange the request token for an access token
-		wstring accessToken = OAuthGetAccessToken(AccessUrl, ConsumerKey, ConsumerSecret, 
+		wstring accessTokenString = OAuthWebRequestSubmit(AccessUrl, L"GET", ConsumerKey, ConsumerSecret, 
 			oauthToken, oauthTokenSecret, pin);
-		OAuthParameters accessResponse = ParseQueryString(accessToken);
 
-		// TODO Store these values for later use
-		oauthAccessToken = accessResponse[L"oauth_token"];
-		oauthAccessTokenSecret = accessResponse[L"oauth_token_secret"];
+		OAuthParameters accessTokenParameters = ParseQueryString(accessTokenString);
+		oauthAccessToken = accessTokenParameters[L"oauth_token"];
+		oauthAccessTokenSecret = accessTokenParameters[L"oauth_token_secret"];
+		screenName = accessTokenParameters[L"screen_name"];
 
-		_TRACE("");
-		_TRACE("Your oauth_token is: %s", oauthAccessToken.c_str());
-		_TRACE("Your oauth_token_secret is: %s", oauthAccessTokenSecret.c_str());
-		_TRACE("");
+		ofstream outFile;
+		outFile.open(AuthFileName.c_str(), ios_base::out | ios_base::trunc);
+		outFile << WideToUTF8(accessTokenString);
+		outFile.close();
 	}
-	// access a protected API call on Twitter
 
-	wstring userTimeline = OAuthGetProtectedResource(UserTimelineUrl, L"GET", ConsumerKey, ConsumerSecret, 
+	wprintf(L"\r\n");
+	wprintf(L"Authorized screen_name: %s\r\n", screenName.c_str());
+	wprintf(L"Your oauth_token is: %s\r\n", oauthAccessToken.c_str());
+	wprintf(L"Your oauth_token_secret is: %s\r\n", oauthAccessTokenSecret.c_str());
+	wprintf(L"\r\n");
+
+	wprintf(L"Press enter to request your time line...\r\n");
+	getchar();
+
+	// access a protected API call on Twitter using our access token
+	wstring userTimeline = OAuthWebRequestSubmit(UserTimelineUrl, L"GET", ConsumerKey, ConsumerSecret, 
 		oauthAccessToken, oauthAccessTokenSecret);
+
+	wprintf(L"\r\nYour timeline:\r\n%s\r\n", userTimeline.c_str());
+
+	wprintf(L"Press enter to exit...\r\n");
+	getchar();
 
 	return 0;
 }
