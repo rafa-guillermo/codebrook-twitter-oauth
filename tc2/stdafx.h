@@ -19,6 +19,7 @@
 #include <list>
 #include <vector>
 #include <map>
+#include <fstream>
 
 typedef std::basic_string<TCHAR> tstring;
 #define SIZEOF(x) (sizeof(x)/sizeof(*x))

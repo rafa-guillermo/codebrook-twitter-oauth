@@ -122,7 +122,7 @@ void _TRACE(LPCSTR fmt, ...)
 		_tcscpy_s(buf, SIZEOF(buf), _T("_DEBUG FORMATTING ERROR\r\n"));
 	}
 
-	_tprintf(buf);
+	//_tprintf(buf);
 	OutputDebugString(buf);
 }
 
